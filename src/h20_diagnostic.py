@@ -27,6 +27,7 @@ import tempfile
 import time
 import traceback
 import webbrowser
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -208,6 +209,12 @@ class Section:
         self.rows: List[Tuple[str, str, str]] = []
         self.banners: List[Tuple[str, str]] = []  # (type, message) type=warn/info/crit
         self.tables: List[Dict[str, Any]] = []    # Voor meervoudige items (schijven, etc.)
+        self.issues: List[Any] = []
+
+    def add_issue(self, severity: str, category: str, what: str, why: str, action: str) -> None:
+        self.issues.append(_Issue(severity, category, what, why, action))
+        if severity in (STATUS_WARN, STATUS_CRIT):
+            self.status = worst(self.status, severity)
 
     def add_row(self, label: str, value: Any, row_status: str = STATUS_INFO) -> None:
         if value is None or value == "":
@@ -228,6 +235,15 @@ class Section:
 
     def add_table(self, title: str, headers: List[str], rows: List[List[str]]) -> None:
         self.tables.append({"title": title, "headers": headers, "rows": rows})
+
+
+@dataclass
+class _Issue:
+    severity: str   # STATUS_WARN of STATUS_CRIT
+    category: str   # bijv. "CPU", "Opslag"
+    what: str       # wat is het probleem
+    why: str        # waarom is het een probleem
+    action: str     # wat moet er gebeuren
 
 
 # ----------------------------------------------------------------------------
@@ -294,6 +310,9 @@ def check_system() -> Section:
             sec.add_row("Uptime", fmt_uptime(uptime_sec), up_status)
             if up_status == STATUS_WARN:
                 sec.add_banner("warn", "PC langer dan 14 dagen online - herstart aanbevolen.")
+                sec.add_issue(STATUS_WARN, "Systeem", "PC meer dan 14 dagen niet herstart",
+                              "Langdurig draaien kan geheugenlekkage en instabiliteit veroorzaken",
+                              "Start de PC opnieuw op")
         else:
             sec.add_row("Uptime", None)
             sec.add_row("Laatste boot", None)
@@ -346,6 +365,14 @@ def check_cpu() -> Section:
             peak_status = STATUS_GOOD if peak < 85 else STATUS_WARN if peak < 98 else STATUS_CRIT
             sec.add_row("CPU-gebruik gemiddeld (10s)", f"{avg:.1f} %", avg_status)
             sec.add_row("CPU-gebruik piek (10s)", f"{peak:.1f} %", peak_status)
+            if avg_status == STATUS_CRIT:
+                sec.add_issue(STATUS_CRIT, "CPU", f"CPU-gebruik kritiek hoog ({avg:.0f}%)",
+                              "Systeem is overbelast en presteert slecht",
+                              "Sluit onnodige processen of herstart de PC")
+            elif avg_status == STATUS_WARN:
+                sec.add_issue(STATUS_WARN, "CPU", f"CPU-gebruik verhoogd ({avg:.0f}%)",
+                              "Systeem draait op de grens van capaciteit",
+                              "Controleer welke processen veel CPU gebruiken en sluit ze")
         else:
             sec.add_banner("warn", "psutil niet beschikbaar - beperkt CPU-overzicht.")
 
@@ -383,6 +410,14 @@ def check_cpu() -> Section:
         if cpu_temp is not None:
             status = STATUS_GOOD if cpu_temp < 70 else STATUS_WARN if cpu_temp < 85 else STATUS_CRIT
             sec.add_row("CPU-temperatuur", f"{cpu_temp:.1f} \u00B0C", status)
+            if status == STATUS_CRIT:
+                sec.add_issue(STATUS_CRIT, "CPU", f"CPU-temperatuur kritiek ({cpu_temp:.0f}\u00B0C)",
+                              "Oververhitting beschadigt hardware en kan de PC afsluiten",
+                              "Schakel de PC uit en reinig de koeling direct")
+            elif status == STATUS_WARN:
+                sec.add_issue(STATUS_WARN, "CPU", f"CPU-temperatuur verhoogd ({cpu_temp:.0f}\u00B0C)",
+                              "Te hoge temperatuur verkort levensduur en verlaagt prestaties",
+                              "Reinig de koelventilator en controleer de thermische pasta")
         else:
             sec.add_row("CPU-temperatuur", None)
             if not is_admin():
@@ -410,6 +445,14 @@ def check_ram() -> Section:
             pct_status = STATUS_GOOD if pct < 75 else STATUS_WARN if pct < 90 else STATUS_CRIT
             sec.add_row("In gebruik", f"{used_gb:.2f} GB ({pct:.0f} %)", pct_status)
             sec.add_row("Beschikbaar", f"{mem.available / (1024 ** 3):.2f} GB", STATUS_GOOD)
+            if pct_status == STATUS_CRIT:
+                sec.add_issue(STATUS_CRIT, "RAM", f"RAM-gebruik kritiek hoog ({pct:.0f}%)",
+                              "Systeem gebruikt wisselgeheugen, wat sterk vertraagt",
+                              "Sluit programma's of voeg extra RAM toe")
+            elif pct_status == STATUS_WARN:
+                sec.add_issue(STATUS_WARN, "RAM", f"RAM-gebruik hoog ({pct:.0f}%)",
+                              "Weinig vrij geheugen beschikbaar",
+                              "Sluit onnodige programma's")
         else:
             sec.add_banner("warn", "psutil niet beschikbaar - gebruik onbekend.")
 
@@ -563,6 +606,22 @@ def check_storage() -> Section:
 
             smart = smart_map.get(letter, "Niet beschikbaar")
             smart_status = STATUS_GOOD if smart == "OK" else STATUS_WARN if smart == "Warning" else STATUS_CRIT if smart == "Error" else STATUS_INFO
+            if smart_status == STATUS_CRIT:
+                sec.add_issue(STATUS_CRIT, "Opslag", f"Schijf {letter}: SMART-fout gedetecteerd",
+                              "Risico op onherstelbaar dataverlies",
+                              f"Maak direct een backup en vervang schijf {letter}")
+            elif smart_status == STATUS_WARN:
+                sec.add_issue(STATUS_WARN, "Opslag", f"Schijf {letter}: SMART-waarschuwing",
+                              "Schijf vertoont tekenen van slijtage",
+                              f"Plan vervanging van schijf {letter} en maak een backup")
+            if free_pct < 10:
+                sec.add_issue(STATUS_CRIT, "Opslag", f"Schijf {letter}: kritiek weinig ruimte ({free_pct:.0f}% vrij)",
+                              "PC kan vastlopen of crashen bij geen vrije ruimte",
+                              f"Verwijder bestanden van schijf {letter} of vergroot de opslag direct")
+            elif free_pct < 20:
+                sec.add_issue(STATUS_WARN, "Opslag", f"Schijf {letter}: bijna vol ({free_pct:.0f}% vrij)",
+                              "Weinig vrije ruimte vertraagt de PC",
+                              f"Verwijder bestanden van schijf {letter} of vergroot de opslag")
 
             # Snelheidstest enkel op vaste schijven met voldoende vrije ruimte
             speed_str_w = "Niet beschikbaar"
@@ -715,14 +774,30 @@ def check_network() -> Section:
             loss = int(loss_match.group(1)) if loss_match else None
 
             if avg is not None:
-                status = STATUS_GOOD if avg < 30 else STATUS_WARN if avg < 80 else STATUS_CRIT
-                sec.add_row("Ping naar 8.8.8.8 (gemiddelde)", f"{avg} ms", status)
+                ping_status = STATUS_GOOD if avg < 30 else STATUS_WARN if avg < 80 else STATUS_CRIT
+                sec.add_row("Ping naar 8.8.8.8 (gemiddelde)", f"{avg} ms", ping_status)
+                if ping_status == STATUS_CRIT:
+                    sec.add_issue(STATUS_CRIT, "Netwerk", f"Kritiek hoge netwerk-latentie ({avg} ms)",
+                                  "Hoge ping maakt online gaming en remote work onbruikbaar",
+                                  "Controleer netwerkkabel en router, bel internet provider")
+                elif ping_status == STATUS_WARN:
+                    sec.add_issue(STATUS_WARN, "Netwerk", f"Verhoogde netwerk-latentie ({avg} ms)",
+                                  "Hoge ping beïnvloedt gameprestaties",
+                                  "Controleer netwerkkabel of schakel naar bedraad internet")
             else:
                 sec.add_row("Ping naar 8.8.8.8 (gemiddelde)", None)
 
             if loss is not None:
-                status = STATUS_GOOD if loss == 0 else STATUS_WARN if loss < 20 else STATUS_CRIT
-                sec.add_row("Packet loss", f"{loss} %", status)
+                loss_status = STATUS_GOOD if loss == 0 else STATUS_WARN if loss < 20 else STATUS_CRIT
+                sec.add_row("Packet loss", f"{loss} %", loss_status)
+                if loss_status == STATUS_CRIT:
+                    sec.add_issue(STATUS_CRIT, "Netwerk", f"Ernstig pakketverlies ({loss}%)",
+                                  "Verbinding is onstabiel, online gaming en videobellen werken niet",
+                                  "Vervang netwerkkabel of start router opnieuw op")
+                elif loss_status == STATUS_WARN:
+                    sec.add_issue(STATUS_WARN, "Netwerk", f"Pakketverlies gedetecteerd ({loss}%)",
+                                  "Instabiele verbinding kan online prestaties verminderen",
+                                  "Controleer netwerkkabel en router")
             else:
                 sec.add_row("Packet loss", None)
         except Exception as exc:  # noqa: BLE001
@@ -741,6 +816,14 @@ def check_network() -> Section:
                 ul_status = STATUS_GOOD if ul > 10 else STATUS_WARN if ul > 3 else STATUS_CRIT
                 sec.add_row("Download", f"{dl:.1f} Mbps", dl_status)
                 sec.add_row("Upload", f"{ul:.1f} Mbps", ul_status)
+                if dl_status == STATUS_CRIT:
+                    sec.add_issue(STATUS_CRIT, "Netwerk", f"Kritiek lage downloadsnelheid ({dl:.0f} Mbps)",
+                                  "Internetverbinding is te traag voor gaming en streaming",
+                                  "Bel internet provider of controleer router")
+                elif dl_status == STATUS_WARN:
+                    sec.add_issue(STATUS_WARN, "Netwerk", f"Lage downloadsnelheid ({dl:.0f} Mbps)",
+                                  "Updates en streaming kunnen vertragen",
+                                  "Controleer of andere apparaten bandbreedte gebruiken")
             except Exception as exc:  # noqa: BLE001
                 log_exception("Speedtest", exc)
                 sec.add_banner("warn", "Speedtest mislukt (firewall of geen internet).")
@@ -874,6 +957,9 @@ def check_eventlog() -> Section:
         if rows:
             sec.add_table("Laatste 10 errors", headers, rows)
             sec.status = worst(sec.status, STATUS_WARN)
+            sec.add_issue(STATUS_WARN, "Eventlog", f"{len(rows)} kritieke fout(en) in Windows-eventlog",
+                          "Kan wijzen op hardware- of softwareproblemen",
+                          "Bekijk de eventlog-sectie voor details en neem contact op met IT")
 
         check_ok("Eventlog check voltooid")
     except Exception as exc:  # noqa: BLE001
@@ -1034,6 +1120,47 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     text-align: center;
   }
   footer span.accent { color: var(--accent); }
+  /* --- Samenvatting & Problemen --- */
+  .sumblock {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-bottom: 28px;
+    overflow: hidden;
+  }
+  .sumblock-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    font-weight: 700;
+    letter-spacing: 1px;
+    font-size: 13px;
+  }
+  .sumblock-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+  .sum-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .sum-overall { font-size: 15px; font-weight: 600; }
+  .sum-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  .sum-item { display: flex; gap: 10px; font-size: 13px; line-height: 1.5; }
+  .sum-icon { flex-shrink: 0; font-size: 15px; line-height: 1.5; }
+  .sum-text { flex: 1; }
+  .sum-text strong { display: block; }
+  .sum-text .sum-why { color: var(--muted); font-size: 12px; }
+  .sum-text .sum-action { color: var(--warn); font-size: 12px; font-weight: 600; }
+  .sum-item.crit .sum-text strong { color: var(--crit); }
+  .sum-item.warn .sum-text strong { color: var(--warn); }
+  .sum-actions-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .sum-actions-list li { font-size: 13px; display: flex; gap: 8px; align-items: flex-start; }
+  .sum-actions-list li::before { content: "→"; color: var(--accent); font-weight: 700; flex-shrink: 0; }
   @media (max-width: 700px) {
     .grid { grid-template-columns: 1fr; }
     .container { padding: 20px 12px 60px; }
@@ -1054,6 +1181,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="meta">Algemene PC-status op basis van __SECTION_COUNT__ checks.</div>
   </div>
 
+  __SUMMARY_BLOCK__
+
   <div class="grid">
     __CARDS__
   </div>
@@ -1066,6 +1195,85 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+def build_summary_html(sections: List[Section]) -> str:
+    """Genereer de Samenvatting & Problemen sectie bovenaan het rapport."""
+    all_issues: List[_Issue] = []
+    for sec in sections:
+        all_issues.extend(sec.issues)
+
+    overall = STATUS_GOOD
+    for s in sections:
+        overall = worst(overall, s.status)
+
+    icon_map = {STATUS_CRIT: "\U0001F534", STATUS_WARN: "\U0001F7E1", STATUS_GOOD: "\U0001F7E2"}
+    label_map = {STATUS_CRIT: "KRITIEK — directe actie vereist", STATUS_WARN: "LET OP — aandacht gewenst", STATUS_GOOD: "GEZOND — geen problemen gevonden"}
+    overall_icon = icon_map.get(overall, "\U0001F7E2")
+    overall_label = label_map.get(overall, "GEZOND")
+
+    parts: List[str] = []
+
+    # Samenvatting
+    parts.append(
+        '<div>'
+        f'<div class="sum-section-title">Samenvatting</div>'
+        f'<div class="sum-overall">{overall_icon} Systeem: {html.escape(overall_label)}</div>'
+        '</div>'
+    )
+
+    # Problemen
+    if all_issues:
+        crits = [i for i in all_issues if i.severity == STATUS_CRIT]
+        warns = [i for i in all_issues if i.severity == STATUS_WARN]
+        items_html = ""
+        for issue in crits + warns:
+            icon = "\U0001F534" if issue.severity == STATUS_CRIT else "\U0001F7E1"
+            css = "crit" if issue.severity == STATUS_CRIT else "warn"
+            items_html += (
+                f'<li class="sum-item {css}">'
+                f'<span class="sum-icon">{icon}</span>'
+                f'<span class="sum-text">'
+                f'<strong>[{html.escape(issue.category)}] {html.escape(issue.what)}</strong>'
+                f'<span class="sum-why">{html.escape(issue.why)}</span>'
+                f'<span class="sum-action">&#8594; {html.escape(issue.action)}</span>'
+                f'</span>'
+                f'</li>'
+            )
+        parts.append(
+            '<div>'
+            '<div class="sum-section-title">Problemen</div>'
+            f'<ul class="sum-list">{items_html}</ul>'
+            '</div>'
+        )
+
+    # Acties (deduplicated, max 5)
+    if all_issues:
+        seen: set = set()
+        actions: List[str] = []
+        for issue in [i for i in all_issues if i.severity == STATUS_CRIT] + \
+                     [i for i in all_issues if i.severity == STATUS_WARN]:
+            if issue.action not in seen:
+                seen.add(issue.action)
+                actions.append(issue.action)
+            if len(actions) == 5:
+                break
+        actions_html = "".join(f'<li>{html.escape(a)}</li>' for a in actions)
+        parts.append(
+            '<div>'
+            '<div class="sum-section-title">Acties</div>'
+            f'<ul class="sum-actions-list">{actions_html}</ul>'
+            '</div>'
+        )
+
+    body_html = "".join(parts)
+
+    return (
+        '<div class="sumblock">'
+        '<div class="sumblock-head">&#128203; SAMENVATTING &amp; PROBLEMEN</div>'
+        f'<div class="sumblock-body">{body_html}</div>'
+        '</div>'
+    )
 
 
 def render_value(value: str, status: str) -> str:
@@ -1131,6 +1339,7 @@ def build_html_report(sections: List[Section]) -> str:
     summary_class, summary_label = summary_map[overall]
 
     cards_html = "".join(render_card(s) for s in sections)
+    summary_block = build_summary_html(sections)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     hostname = html.escape(socket.gethostname() or "onbekend")
 
@@ -1141,6 +1350,7 @@ def build_html_report(sections: List[Section]) -> str:
                 .replace("__SUMMARY_CLASS__", summary_class)
                 .replace("__SUMMARY_LABEL__", summary_label)
                 .replace("__SECTION_COUNT__", str(len(sections)))
+                .replace("__SUMMARY_BLOCK__", summary_block)
                 .replace("__CARDS__", cards_html)
                 .replace("__VERSION__", APP_VERSION))
     return html_out
