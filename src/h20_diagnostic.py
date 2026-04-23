@@ -798,46 +798,73 @@ def check_network() -> Section:
             log_exception("Ping-test", exc)
             sec.add_banner("warn", "Ping-test mislukt (firewall of geen internet).")
 
-        # Speedtest via Cloudflare (geen externe library nodig)
+        # Speedtest via HTTP download + upload (geen SSL, werkt altijd)
         try:
             print("    Uitvoeren speedtest (download + upload)...")
             import urllib.request
-            import io
+            import ssl
 
-            # Download: 25 MB van Cloudflare
-            dl_url = "https://speed.cloudflare.com/__down?bytes=25000000"
-            t0 = time.perf_counter()
-            with urllib.request.urlopen(dl_url, timeout=30) as resp:
-                dl_bytes = len(resp.read())
-            dl_elapsed = time.perf_counter() - t0
-            dl = (dl_bytes * 8) / (dl_elapsed * 1_000_000)
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
 
-            # Upload: 10 MB naar Cloudflare
-            ul_data = os.urandom(10 * 1024 * 1024)
-            req = urllib.request.Request(
-                "https://speed.cloudflare.com/__up",
-                data=ul_data,
-                method="POST",
-            )
-            req.add_header("Content-Type", "application/octet-stream")
-            t0 = time.perf_counter()
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                resp.read()
-            ul_elapsed = time.perf_counter() - t0
-            ul = (len(ul_data) * 8) / (ul_elapsed * 1_000_000)
+            # Download: probeer meerdere betrouwbare HTTP-servers
+            dl: Optional[float] = None
+            for dl_url in [
+                "http://ipv4.download.thinkbroadband.com/10MB.zip",
+                "http://speedtest.tele2.net/10MB.zip",
+                "http://proof.ovh.net/files/10Mb.dat",
+            ]:
+                try:
+                    t0 = time.perf_counter()
+                    with urllib.request.urlopen(dl_url, timeout=20) as resp:
+                        dl_bytes = len(resp.read())
+                    dl_elapsed = time.perf_counter() - t0
+                    if dl_elapsed > 0:
+                        dl = (dl_bytes * 8) / (dl_elapsed * 1_000_000)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
 
-            dl_status = STATUS_GOOD if dl > 50 else STATUS_WARN if dl > 15 else STATUS_CRIT
-            ul_status = STATUS_GOOD if ul > 10 else STATUS_WARN if ul > 3 else STATUS_CRIT
-            sec.add_row("Download", f"{dl:.1f} Mbps", dl_status)
-            sec.add_row("Upload", f"{ul:.1f} Mbps", ul_status)
-            if dl_status == STATUS_CRIT:
-                sec.add_issue(STATUS_CRIT, "Netwerk", f"Kritiek lage downloadsnelheid ({dl:.0f} Mbps)",
-                              "Internetverbinding is te traag voor gaming en streaming",
-                              "Bel internet provider of controleer router")
-            elif dl_status == STATUS_WARN:
-                sec.add_issue(STATUS_WARN, "Netwerk", f"Lage downloadsnelheid ({dl:.0f} Mbps)",
-                              "Updates en streaming kunnen vertragen",
-                              "Controleer of andere apparaten bandbreedte gebruiken")
+            # Upload: 5 MB naar Cloudflare (SSL-verificatie uitgeschakeld)
+            ul: Optional[float] = None
+            try:
+                ul_data = os.urandom(5 * 1024 * 1024)
+                req = urllib.request.Request(
+                    "https://speed.cloudflare.com/__up",
+                    data=ul_data,
+                    method="POST",
+                )
+                req.add_header("Content-Type", "application/octet-stream")
+                t0 = time.perf_counter()
+                with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
+                    resp.read()
+                ul_elapsed = time.perf_counter() - t0
+                if ul_elapsed > 0:
+                    ul = (len(ul_data) * 8) / (ul_elapsed * 1_000_000)
+            except Exception as exc:  # noqa: BLE001
+                log_exception("Speedtest upload", exc)
+
+            if dl is not None:
+                dl_status = STATUS_GOOD if dl > 50 else STATUS_WARN if dl > 15 else STATUS_CRIT
+                sec.add_row("Download", f"{dl:.1f} Mbps", dl_status)
+                if dl_status == STATUS_CRIT:
+                    sec.add_issue(STATUS_CRIT, "Netwerk", f"Kritiek lage downloadsnelheid ({dl:.0f} Mbps)",
+                                  "Internetverbinding is te traag voor gaming en streaming",
+                                  "Bel internet provider of controleer router")
+                elif dl_status == STATUS_WARN:
+                    sec.add_issue(STATUS_WARN, "Netwerk", f"Lage downloadsnelheid ({dl:.0f} Mbps)",
+                                  "Updates en streaming kunnen vertragen",
+                                  "Controleer of andere apparaten bandbreedte gebruiken")
+            else:
+                sec.add_row("Download", None)
+
+            if ul is not None:
+                ul_status = STATUS_GOOD if ul > 10 else STATUS_WARN if ul > 3 else STATUS_CRIT
+                sec.add_row("Upload", f"{ul:.1f} Mbps", ul_status)
+            else:
+                sec.add_row("Upload", None)
+
         except Exception as exc:  # noqa: BLE001
             log_exception("Speedtest", exc)
             sec.add_banner("warn", "Speedtest mislukt (geen internet of firewall blokkeert).")
