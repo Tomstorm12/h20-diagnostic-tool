@@ -826,24 +826,27 @@ def check_network() -> Section:
                 except Exception:  # noqa: BLE001
                     continue
 
-            # Upload: 5 MB naar Cloudflare (SSL-verificatie uitgeschakeld)
+            # Upload: 2 MB naar meerdere fallback-servers
             ul: Optional[float] = None
-            try:
-                ul_data = os.urandom(5 * 1024 * 1024)
-                req = urllib.request.Request(
-                    "https://speed.cloudflare.com/__up",
-                    data=ul_data,
-                    method="POST",
-                )
-                req.add_header("Content-Type", "application/octet-stream")
-                t0 = time.perf_counter()
-                with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
-                    resp.read()
-                ul_elapsed = time.perf_counter() - t0
-                if ul_elapsed > 0:
-                    ul = (len(ul_data) * 8) / (ul_elapsed * 1_000_000)
-            except Exception as exc:  # noqa: BLE001
-                log_exception("Speedtest upload", exc)
+            ul_data = os.urandom(2 * 1024 * 1024)
+            for ul_url in [
+                "https://httpbin.org/post",
+                "https://postman-echo.com/post",
+                "https://speed.cloudflare.com/__up",
+            ]:
+                try:
+                    req = urllib.request.Request(ul_url, data=ul_data, method="POST")
+                    req.add_header("Content-Type", "application/octet-stream")
+                    t0 = time.perf_counter()
+                    with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as resp:
+                        resp.read()
+                    ul_elapsed = time.perf_counter() - t0
+                    if ul_elapsed > 0:
+                        ul = (len(ul_data) * 8) / (ul_elapsed * 1_000_000)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    log_exception(f"Speedtest upload ({ul_url})", exc)
+                    continue
 
             if dl is not None:
                 dl_status = STATUS_GOOD if dl > 50 else STATUS_WARN if dl > 15 else STATUS_CRIT
