@@ -62,9 +62,10 @@ except Exception:  # noqa: BLE001
         return _Dummy()
 
 try:
-    import speedtest  # type: ignore
+    import urllib.request as _urllib_request
+    _urllib_request  # zorg dat het beschikbaar is
 except Exception:  # noqa: BLE001
-    speedtest = None  # type: ignore
+    pass
 
 
 # ----------------------------------------------------------------------------
@@ -691,13 +692,6 @@ def check_gpu() -> Section:
         for idx, gpu in enumerate(gpus, start=1):
             name = (gpu.Name or "Onbekend").strip()
             sec.add_row(f"GPU {idx}", name, STATUS_GOOD)
-            vram = getattr(gpu, "AdapterRAM", None)
-            if vram and vram > 0:
-                # AdapterRAM is beperkt tot 4GB op 32-bit WMI; compenseer indien nodig
-                vram_bytes = int(vram) & 0xFFFFFFFF
-                sec.add_row(f"GPU {idx} VRAM", fmt_bytes(vram_bytes), STATUS_GOOD)
-            else:
-                sec.add_row(f"GPU {idx} VRAM", None)
             drv = getattr(gpu, "DriverVersion", None)
             drv_date = getattr(gpu, "DriverDate", None)
             sec.add_row(f"GPU {idx} driver", drv, STATUS_GOOD if drv else STATUS_INFO)
@@ -804,33 +798,51 @@ def check_network() -> Section:
             log_exception("Ping-test", exc)
             sec.add_banner("warn", "Ping-test mislukt (firewall of geen internet).")
 
-        # Speedtest
-        if speedtest is not None:
-            try:
-                print("    Uitvoeren speedtest (kan 20-40 sec duren)...")
-                st = speedtest.Speedtest(secure=True)
-                st.get_best_server()
-                dl = st.download() / 1_000_000  # Mbps
-                ul = st.upload(pre_allocate=False) / 1_000_000
-                dl_status = STATUS_GOOD if dl > 50 else STATUS_WARN if dl > 15 else STATUS_CRIT
-                ul_status = STATUS_GOOD if ul > 10 else STATUS_WARN if ul > 3 else STATUS_CRIT
-                sec.add_row("Download", f"{dl:.1f} Mbps", dl_status)
-                sec.add_row("Upload", f"{ul:.1f} Mbps", ul_status)
-                if dl_status == STATUS_CRIT:
-                    sec.add_issue(STATUS_CRIT, "Netwerk", f"Kritiek lage downloadsnelheid ({dl:.0f} Mbps)",
-                                  "Internetverbinding is te traag voor gaming en streaming",
-                                  "Bel internet provider of controleer router")
-                elif dl_status == STATUS_WARN:
-                    sec.add_issue(STATUS_WARN, "Netwerk", f"Lage downloadsnelheid ({dl:.0f} Mbps)",
-                                  "Updates en streaming kunnen vertragen",
-                                  "Controleer of andere apparaten bandbreedte gebruiken")
-            except Exception as exc:  # noqa: BLE001
-                log_exception("Speedtest", exc)
-                sec.add_banner("warn", "Speedtest mislukt (firewall of geen internet).")
-                sec.add_row("Download", None)
-                sec.add_row("Upload", None)
-        else:
-            sec.add_banner("warn", "speedtest-cli niet beschikbaar.")
+        # Speedtest via Cloudflare (geen externe library nodig)
+        try:
+            print("    Uitvoeren speedtest (download + upload)...")
+            import urllib.request
+            import io
+
+            # Download: 25 MB van Cloudflare
+            dl_url = "https://speed.cloudflare.com/__down?bytes=25000000"
+            t0 = time.perf_counter()
+            with urllib.request.urlopen(dl_url, timeout=30) as resp:
+                dl_bytes = len(resp.read())
+            dl_elapsed = time.perf_counter() - t0
+            dl = (dl_bytes * 8) / (dl_elapsed * 1_000_000)
+
+            # Upload: 10 MB naar Cloudflare
+            ul_data = os.urandom(10 * 1024 * 1024)
+            req = urllib.request.Request(
+                "https://speed.cloudflare.com/__up",
+                data=ul_data,
+                method="POST",
+            )
+            req.add_header("Content-Type", "application/octet-stream")
+            t0 = time.perf_counter()
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+            ul_elapsed = time.perf_counter() - t0
+            ul = (len(ul_data) * 8) / (ul_elapsed * 1_000_000)
+
+            dl_status = STATUS_GOOD if dl > 50 else STATUS_WARN if dl > 15 else STATUS_CRIT
+            ul_status = STATUS_GOOD if ul > 10 else STATUS_WARN if ul > 3 else STATUS_CRIT
+            sec.add_row("Download", f"{dl:.1f} Mbps", dl_status)
+            sec.add_row("Upload", f"{ul:.1f} Mbps", ul_status)
+            if dl_status == STATUS_CRIT:
+                sec.add_issue(STATUS_CRIT, "Netwerk", f"Kritiek lage downloadsnelheid ({dl:.0f} Mbps)",
+                              "Internetverbinding is te traag voor gaming en streaming",
+                              "Bel internet provider of controleer router")
+            elif dl_status == STATUS_WARN:
+                sec.add_issue(STATUS_WARN, "Netwerk", f"Lage downloadsnelheid ({dl:.0f} Mbps)",
+                              "Updates en streaming kunnen vertragen",
+                              "Controleer of andere apparaten bandbreedte gebruiken")
+        except Exception as exc:  # noqa: BLE001
+            log_exception("Speedtest", exc)
+            sec.add_banner("warn", "Speedtest mislukt (geen internet of firewall blokkeert).")
+            sec.add_row("Download", None)
+            sec.add_row("Upload", None)
 
         check_ok("Netwerk check voltooid")
     except Exception as exc:  # noqa: BLE001
@@ -905,6 +917,10 @@ def check_eventlog() -> Section:
     """Laatste 10 kritieke errors uit Windows-eventlog."""
     sec = Section("Windows Eventlog", "\U0001F4DC")  # boekrol
     try:
+        sec.add_banner("info",
+            "Het Windows-eventlog registreert alle systeemfouten en crashes. "
+            "Kritieke fouten kunnen wijzen op defecte hardware (RAM, schijf), "
+            "stuurprogrammaproblemen of herhalende crashes die de PC instabiel maken.")
         c = new_wmi()
         if c is None:
             sec.add_banner("warn", "WMI niet beschikbaar - eventlog niet leesbaar.")
@@ -1161,6 +1177,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .sum-actions-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
   .sum-actions-list li { font-size: 13px; display: flex; gap: 8px; align-items: flex-start; }
   .sum-actions-list li::before { content: "→"; color: var(--accent); font-weight: 700; flex-shrink: 0; }
+  .sum-action-cat { color: var(--muted); font-size: 11px; }
   @media (max-width: 700px) {
     .grid { grid-template-columns: 1fr; }
     .container { padding: 20px 12px 60px; }
@@ -1250,15 +1267,18 @@ def build_summary_html(sections: List[Section]) -> str:
     # Acties (deduplicated, max 5)
     if all_issues:
         seen: set = set()
-        actions: List[str] = []
+        actions: List[tuple] = []
         for issue in [i for i in all_issues if i.severity == STATUS_CRIT] + \
                      [i for i in all_issues if i.severity == STATUS_WARN]:
             if issue.action not in seen:
                 seen.add(issue.action)
-                actions.append(issue.action)
+                actions.append((issue.action, issue.category))
             if len(actions) == 5:
                 break
-        actions_html = "".join(f'<li>{html.escape(a)}</li>' for a in actions)
+        actions_html = "".join(
+            f'<li>{html.escape(a)} <span class="sum-action-cat">({html.escape(cat)})</span></li>'
+            for a, cat in actions
+        )
         parts.append(
             '<div>'
             '<div class="sum-section-title">Acties</div>'
@@ -1400,7 +1420,6 @@ def main() -> int:
         ("Opslag",         check_storage),
         ("GPU",            check_gpu),
         ("Netwerk",        check_network),
-        ("Temperaturen",   check_temperatures),
         ("Eventlog",       check_eventlog),
     ]
 
