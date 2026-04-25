@@ -4,10 +4,16 @@ __pycache__/
 *.pyo
 *.pyd
 
-# PyInstaller
+# PyInstaller build-artefacten
 dist/
-build/
+build/_pyinstaller_work/
 *.spec
+
+# Gegenereerde .exe in de project-root (output van build\build.bat)
+h20_diagnostic.exe
+
+# HTML-rapporten die naast de .exe verschijnen na een scan
+h20_diagnostic_report_*.html
 
 # Logs
 h20_diagnostic_log.txt

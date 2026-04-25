@@ -1,5 +1,7 @@
 # H20 Diagnostic Tool - Setup & Build
-# Run als administrator in PowerShell
+# Run als administrator in PowerShell.
+# Dit script installeert Python (indien nodig), downloadt de repo van GitHub
+# en bouwt de standalone h20_diagnostic.exe.
 
 $ErrorActionPreference = "Stop"
 
@@ -35,15 +37,25 @@ Write-Host ""
 Write-Host "[3/4] .exe bouwen..." -ForegroundColor Yellow
 Set-Location $dir
 python -m pip install --upgrade pip -q
-python -m pip install -r requirements.txt -q
-python -m PyInstaller --onefile --console --name h20_diagnostic --clean --noconfirm --add-data "assets/h20_logo.txt;assets" src\h20_diagnostic.py
+python -m pip install -r build\requirements.txt -q
+python -m PyInstaller `
+    --onefile `
+    --console `
+    --name h20_diagnostic `
+    --clean `
+    --noconfirm `
+    --distpath . `
+    --workpath build\_pyinstaller_work `
+    --specpath build\_pyinstaller_work `
+    --add-data "assets/h20_logo.txt;assets" `
+    src\h20_diagnostic.py
 Write-Host "Build OK" -ForegroundColor Green
 
 # Stap 4: Klaar
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
 Write-Host "  Klaar! .exe staat hier:" -ForegroundColor Green
-Write-Host "  $dir\dist\h20_diagnostic.exe" -ForegroundColor White
+Write-Host "  $dir\h20_diagnostic.exe" -ForegroundColor White
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Kopieer h20_diagnostic.exe naar je USB-stick." -ForegroundColor Cyan

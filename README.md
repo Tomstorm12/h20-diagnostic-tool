@@ -33,24 +33,28 @@ Every check degrades gracefully. A sensor that's not available shows
 ### 1. Run directly from source
 
 ```bash
-pip install -r requirements.txt
+pip install -r build/requirements.txt
 python src/h20_diagnostic.py
 ```
 
 ### 2. Build the portable EXE
 
+From the project root, run:
+
 ```bat
-build.bat
+build\build.bat
 ```
 
-This installs dependencies, runs PyInstaller, and produces
-`dist/h20_diagnostic.exe`. The build script prints:
+This installs dependencies, runs PyInstaller, and drops a single file —
+`h20_diagnostic.exe` — directly in the **project root** (no `dist/` folder).
+The build script prints:
 
-> Build geslaagd. Kopieer dist/h20_diagnostic.exe naar je USB-stick.
+> Build geslaagd. h20_diagnostic.exe staat in de projectroot.
+> Kopieer dat bestand naar je USB-stick.
 
 ### 3. Use from a USB stick
 
-1. Copy `dist/h20_diagnostic.exe` to any USB drive.
+1. Copy `h20_diagnostic.exe` from the project root to any USB drive.
 2. Plug the stick into the target PC.
 3. Double-click `h20_diagnostic.exe`.
 4. A small terminal window shows the scan progress; the HTML report opens
@@ -93,17 +97,24 @@ your build output.
 
 ```
 h20-diagnostic-tool/
+├── h20_diagnostic.exe        ← the only top-level file (after build, gitignored)
 ├── README.md
-├── requirements.txt
 ├── .gitignore
-├── build.bat
-├── src/
+├── build/                    ← build scripts & dependencies
+│   ├── build.bat
+│   ├── setup_usb.ps1
+│   └── requirements.txt
+├── src/                      ← Python source
 │   └── h20_diagnostic.py
-├── assets/
+├── assets/                   ← static resources bundled into the .exe
 │   └── h20_logo.txt
-└── tools/
+└── tools/                    ← optional external helpers (see tools/README.md)
     └── README.md
 ```
+
+The deliverable — `h20_diagnostic.exe` — is the **only file** that lives at the
+project root after a build. Everything else is tucked into a clearly named
+folder so the executable is impossible to miss.
 
 ## License
 
