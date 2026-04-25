@@ -38,6 +38,12 @@ REM --name:           naam van het uitvoerbestand
 REM --clean:          oude build-bestanden opruimen
 REM --hidden-import:  modules die PyInstaller niet automatisch detecteert (wmi/pywin32)
 REM --collect-all:    pak hele package mee (incl. data-files en submodules)
+REM Bouw absolute paden zodat PyInstaller --add-data ze altijd vindt.
+REM (Zonder absolute pad zoekt PyInstaller relatief t.o.v. --specpath i.p.v. cwd.)
+set "PROJECT_ROOT=%CD%"
+set "LOGO_SRC=%PROJECT_ROOT%\assets\h20_logo.txt"
+set "ENTRY=%PROJECT_ROOT%\src\h20_diagnostic.py"
+
 echo.
 echo [2/4] Bouwen van h20_diagnostic.exe met PyInstaller...
 python -m PyInstaller ^
@@ -46,18 +52,18 @@ python -m PyInstaller ^
     --name h20_diagnostic ^
     --clean ^
     --noconfirm ^
-    --distpath . ^
-    --workpath build\_pyinstaller_work ^
-    --specpath build\_pyinstaller_work ^
-    --add-data "assets/h20_logo.txt;assets" ^
+    --distpath "%PROJECT_ROOT%" ^
+    --workpath "%PROJECT_ROOT%\build\_pyinstaller_work" ^
+    --specpath "%PROJECT_ROOT%\build\_pyinstaller_work" ^
+    --add-data "%LOGO_SRC%;assets" ^
     --hidden-import win32com ^
     --hidden-import win32com.client ^
     --hidden-import pythoncom ^
     --hidden-import pywintypes ^
     --hidden-import win32api ^
     --hidden-import win32con ^
-    --collect-all wmi ^
-    src\h20_diagnostic.py
+    --hidden-import wmi ^
+    "%ENTRY%"
 
 if errorlevel 1 (
     echo.

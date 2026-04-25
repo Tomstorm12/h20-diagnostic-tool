@@ -76,10 +76,19 @@ if ($LASTEXITCODE -ne 0) { Fail "pip install -r build\requirements.txt mislukt (
 python -m pip install pywin32 2>&1 | Out-Host
 
 Write-Host "      PyInstaller draaien..." -ForegroundColor Gray
+# Bouw absolute paden zodat PyInstaller --add-data het logo altijd vindt.
+# Zonder absolute pad zoekt PyInstaller relatief t.o.v. --specpath en faalt.
+$logoSrc = Join-Path $dir "assets\h20_logo.txt"
+$entry   = Join-Path $dir "src\h20_diagnostic.py"
+$workDir = Join-Path $dir "build\_pyinstaller_work"
+$specDir = Join-Path $dir "build\_pyinstaller_work"
+
+if (-not (Test-Path $logoSrc)) { Fail "Logo niet gevonden: $logoSrc" }
+if (-not (Test-Path $entry))   { Fail "Entry-script niet gevonden: $entry" }
+
 # Argumenten als array zodat PowerShell quoting geen issues geeft.
-# --hidden-import en --collect-all zijn cruciaal: PyInstaller detecteert
-# de pywin32-modules niet altijd automatisch en zonder die gaat de .exe
-# crashen op het eerste WMI-aanroep (wat 'rode foutmeldingen' veroorzaakt).
+# --hidden-import zorgt dat PyInstaller de pywin32-modules en wmi meebakt;
+# zonder die imports crasht de .exe direct op het eerste WMI-aanroep.
 $pyiArgs = @(
     "-m", "PyInstaller",
     "--onefile",
@@ -87,18 +96,18 @@ $pyiArgs = @(
     "--name", "h20_diagnostic",
     "--clean",
     "--noconfirm",
-    "--distpath", ".",
-    "--workpath", "build\_pyinstaller_work",
-    "--specpath", "build\_pyinstaller_work",
-    "--add-data", "assets/h20_logo.txt;assets",
+    "--distpath", $dir,
+    "--workpath", $workDir,
+    "--specpath", $specDir,
+    "--add-data", "${logoSrc};assets",
     "--hidden-import", "win32com",
     "--hidden-import", "win32com.client",
     "--hidden-import", "pythoncom",
     "--hidden-import", "pywintypes",
     "--hidden-import", "win32api",
     "--hidden-import", "win32con",
-    "--collect-all", "wmi",
-    "src\h20_diagnostic.py"
+    "--hidden-import", "wmi",
+    $entry
 )
 & python @pyiArgs 2>&1 | Out-Host
 $pyiExit = $LASTEXITCODE
