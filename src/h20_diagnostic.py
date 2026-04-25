@@ -19,7 +19,7 @@ import html
 import logging
 import os
 import platform
-import shutil
+import re
 import socket
 import subprocess
 import sys
@@ -33,6 +33,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # ----------------------------------------------------------------------------
+# UTF-8 console fix - voorkomt UnicodeEncodeError op Windows cp1252
+# ----------------------------------------------------------------------------
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+try:
+    if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+except Exception:  # noqa: BLE001
+    # Oudere Python of niet-standaard streams: blijf doorgaan
+    pass
+
+# ----------------------------------------------------------------------------
 # Externe libraries - veilig importeren met fallbacks
 # ----------------------------------------------------------------------------
 try:
@@ -40,12 +53,17 @@ try:
 except Exception:  # noqa: BLE001
     psutil = None  # type: ignore
 
+# WMI heeft pywin32 nodig (win32com, pythoncom, pywintypes).
+# Deze worden expliciet via PyInstaller --hidden-import meegenomen in build.bat.
 try:
-    import wmi  # type: ignore
     import pythoncom  # type: ignore
 except Exception:  # noqa: BLE001
-    wmi = None  # type: ignore
     pythoncom = None  # type: ignore
+
+try:
+    import wmi  # type: ignore
+except Exception:  # noqa: BLE001
+    wmi = None  # type: ignore
 
 try:
     from tqdm import tqdm  # type: ignore
@@ -60,12 +78,6 @@ except Exception:  # noqa: BLE001
             def __enter__(self): return self
             def __exit__(self, *a): pass
         return _Dummy()
-
-try:
-    import urllib.request as _urllib_request
-    _urllib_request  # zorg dat het beschikbaar is
-except Exception:  # noqa: BLE001
-    pass
 
 
 # ----------------------------------------------------------------------------
@@ -161,19 +173,43 @@ def fmt_uptime(seconds: float) -> str:
     return ", ".join(parts)
 
 
-def new_wmi() -> Optional[Any]:
-    """Maak een WMI-client aan; retourneer None als het niet lukt."""
+_COM_INITIALIZED = False
+
+
+def _ensure_com_initialized() -> None:
+    """Initialiseer COM voor de huidige thread (idempotent)."""
+    global _COM_INITIALIZED
+    if _COM_INITIALIZED or pythoncom is None:
+        return
+    try:
+        # COINIT_MULTITHREADED = 0x0; COINIT_APARTMENTTHREADED = 0x2
+        pythoncom.CoInitializeEx(0)  # type: ignore[attr-defined]
+        _COM_INITIALIZED = True
+    except Exception:  # noqa: BLE001
+        # Eerder al geïnitialiseerd of niet ondersteund - ga door
+        try:
+            pythoncom.CoInitialize()  # type: ignore[attr-defined]
+            _COM_INITIALIZED = True
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def new_wmi(namespace: Optional[str] = None) -> Optional[Any]:
+    """Maak een WMI-client aan; retourneer None als het niet lukt.
+
+    Args:
+        namespace: optionele WMI-namespace (bv. ``"root\\wmi"``).
+                   Default = ``None`` => standaard ``root\\cimv2``.
+    """
     if wmi is None:
         return None
     try:
-        if pythoncom is not None:
-            try:
-                pythoncom.CoInitialize()
-            except Exception:  # noqa: BLE001
-                pass
+        _ensure_com_initialized()
+        if namespace:
+            return wmi.WMI(namespace=namespace)
         return wmi.WMI()
     except Exception as exc:  # noqa: BLE001
-        log_exception("WMI initialisatie", exc)
+        log_exception(f"WMI initialisatie (namespace={namespace})", exc)
         return None
 
 
@@ -278,12 +314,24 @@ def print_av_warning() -> None:
     print()
 
 
+def safe_print(message: str) -> None:
+    """Print zonder te crashen op encoding-fouten (oude Windows-console)."""
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        try:
+            sys.stdout.buffer.write((message + "\n").encode("utf-8", errors="replace"))
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001
+            print(message.encode("ascii", errors="replace").decode("ascii"))
+
+
 def check_ok(message: str) -> None:
-    print(f"[\u2713] {message}")
+    safe_print(f"[OK] {message}")
 
 
 def check_fail(message: str) -> None:
-    print(f"[!] {message}")
+    safe_print(f"[!]  {message}")
 
 
 # ============================================================================
@@ -381,14 +429,14 @@ def check_cpu() -> Section:
         cpu_temp: Optional[float] = None
         if c is not None:
             try:
-                w_root = c  # hoofddomein
                 try:
-                    w_wmi = wmi.WMI(namespace=r"root\wmi")  # type: ignore[union-attr]
-                    zones = w_wmi.MSAcpi_ThermalZoneTemperature()
-                    if zones:
-                        # Waarde is in tienden van Kelvin
-                        kelvin_tenths = zones[0].CurrentTemperature
-                        cpu_temp = (kelvin_tenths / 10.0) - 273.15
+                    w_wmi = new_wmi(namespace=r"root\wmi")
+                    if w_wmi is not None:
+                        zones = w_wmi.MSAcpi_ThermalZoneTemperature()
+                        if zones:
+                            # Waarde is in tienden van Kelvin
+                            kelvin_tenths = zones[0].CurrentTemperature
+                            cpu_temp = (kelvin_tenths / 10.0) - 273.15
                 except Exception as exc:  # noqa: BLE001
                     log_exception("WMI ThermalZone", exc)
 
@@ -759,8 +807,7 @@ def check_network() -> Section:
                 creationflags=creationflags,
             )
             output = proc.stdout + proc.stderr
-            # Parse resultaten
-            import re
+            # Parse resultaten (re is al geïmporteerd bovenaan)
             # Gemiddelde: "Average = 12ms"
             avg_match = re.search(r"(?:Average|Gemiddelde)\s*=\s*(\d+)\s*ms", output)
             loss_match = re.search(r"\((\d+)%\s*(?:loss|verlies)\)", output)
@@ -899,10 +946,9 @@ def check_temperatures() -> Section:
             temps = {}
 
         # Ook via WMI ThermalZone proberen
-        c = None
         thermal_zones: List[Tuple[str, float]] = []
         try:
-            w_wmi = wmi.WMI(namespace=r"root\wmi") if wmi is not None else None  # type: ignore[union-attr]
+            w_wmi = new_wmi(namespace=r"root\wmi")
             if w_wmi is not None:
                 zones = w_wmi.MSAcpi_ThermalZoneTemperature()
                 for idx, z in enumerate(zones, start=1):
@@ -963,16 +1009,31 @@ def check_eventlog() -> Section:
                 "Deze check vereist beheerdersrechten. Start de tool als administrator voor volledige resultaten.",
             )
 
+        # Beperk de zoekopdracht tot de laatste 7 dagen via WQL
+        # zodat we niet alle eventlog-records (kan 100k+ zijn) ophalen.
+        # WMI-datumformaat: yyyymmddHHMMSS.ffffff+UUU
+        cutoff = datetime.now() - timedelta(days=7)
+        wql_cutoff = cutoff.strftime("%Y%m%d%H%M%S.000000+000")
+        wql = (
+            "SELECT TimeGenerated, SourceName, Message, Type "
+            "FROM Win32_NTLogEvent "
+            f"WHERE Type='Error' AND TimeGenerated >= '{wql_cutoff}'"
+        )
+        events: List[Any] = []
         try:
-            # Event Type 1 = Error. Sorteer op tijd, neem laatste 10.
-            events = c.Win32_NTLogEvent(Type="Error")
+            events = list(c.query(wql))
         except Exception as exc:  # noqa: BLE001
-            log_exception("WMI NTLogEvent", exc)
-            events = []
+            log_exception("WMI NTLogEvent (WQL)", exc)
+            # Fallback: gewoon directe call zonder filter, maar gelimiteerd
+            try:
+                events = list(c.Win32_NTLogEvent(Type="Error"))[:200]
+            except Exception as exc2:  # noqa: BLE001
+                log_exception("WMI NTLogEvent fallback", exc2)
+                events = []
 
         if not events:
-            sec.add_row("Recente fouten", "Geen (of niet leesbaar)", STATUS_GOOD)
-            check_ok("Eventlog gelezen")
+            sec.add_row("Recente fouten (laatste 7 dagen)", "Geen", STATUS_GOOD)
+            check_ok("Eventlog gelezen - geen recente fouten")
             return sec
 
         # Sorteer op TimeGenerated (laatste eerst) - WMI geeft strings

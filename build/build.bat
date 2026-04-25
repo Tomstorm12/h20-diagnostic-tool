@@ -28,11 +28,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Extra: pywin32 expliciet (vereist door wmi op sommige Python-builds)
+python -m pip install pywin32
+
 REM Stap 2: PyInstaller aanroepen
-REM --onefile: alles in een enkele .exe
-REM --console: klein terminal-venster voor tqdm-progressie tijdens scan
-REM --name:    naam van het uitvoerbestand
-REM --clean:   oude build-bestanden opruimen
+REM --onefile:        alles in een enkele .exe
+REM --console:        klein terminal-venster voor tqdm-progressie tijdens scan
+REM --name:           naam van het uitvoerbestand
+REM --clean:          oude build-bestanden opruimen
+REM --hidden-import:  modules die PyInstaller niet automatisch detecteert (wmi/pywin32)
+REM --collect-all:    pak hele package mee (incl. data-files en submodules)
 echo.
 echo [2/4] Bouwen van h20_diagnostic.exe met PyInstaller...
 python -m PyInstaller ^
@@ -45,6 +50,13 @@ python -m PyInstaller ^
     --workpath build\_pyinstaller_work ^
     --specpath build\_pyinstaller_work ^
     --add-data "assets/h20_logo.txt;assets" ^
+    --hidden-import win32com ^
+    --hidden-import win32com.client ^
+    --hidden-import pythoncom ^
+    --hidden-import pywintypes ^
+    --hidden-import win32api ^
+    --hidden-import win32con ^
+    --collect-all wmi ^
     src\h20_diagnostic.py
 
 if errorlevel 1 (

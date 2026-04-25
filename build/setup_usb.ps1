@@ -76,7 +76,10 @@ if ($LASTEXITCODE -ne 0) { Fail "pip install -r build\requirements.txt mislukt (
 python -m pip install pywin32 2>&1 | Out-Host
 
 Write-Host "      PyInstaller draaien..." -ForegroundColor Gray
-# Argumenten als array zodat PowerShell quoting geen issues geeft
+# Argumenten als array zodat PowerShell quoting geen issues geeft.
+# --hidden-import en --collect-all zijn cruciaal: PyInstaller detecteert
+# de pywin32-modules niet altijd automatisch en zonder die gaat de .exe
+# crashen op het eerste WMI-aanroep (wat 'rode foutmeldingen' veroorzaakt).
 $pyiArgs = @(
     "-m", "PyInstaller",
     "--onefile",
@@ -88,6 +91,13 @@ $pyiArgs = @(
     "--workpath", "build\_pyinstaller_work",
     "--specpath", "build\_pyinstaller_work",
     "--add-data", "assets/h20_logo.txt;assets",
+    "--hidden-import", "win32com",
+    "--hidden-import", "win32com.client",
+    "--hidden-import", "pythoncom",
+    "--hidden-import", "pywintypes",
+    "--hidden-import", "win32api",
+    "--hidden-import", "win32con",
+    "--collect-all", "wmi",
     "src\h20_diagnostic.py"
 )
 & python @pyiArgs 2>&1 | Out-Host
