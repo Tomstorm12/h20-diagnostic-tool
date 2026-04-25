@@ -1406,27 +1406,43 @@ def build_html_report(sections: List[Section]) -> str:
     return html_out
 
 
+def _sanitize_filename(name: str) -> str:
+    """Maak een veilige bestandsnaam: alleen alfanumeriek, dash, underscore."""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+    return safe.strip("_") or "PC"
+
+
 def write_and_open_report(html_content: str) -> Path:
-    """Schrijf het rapport naar een tijdelijk bestand en open het in de browser."""
+    """Schrijf het rapport naar <root van .exe>/Reports/<HOSTNAME>.html.
+
+    Bij USB-gebruik komt het rapport dus op de stick zelf in de Reports-map,
+    met de PC-naam als bestandsnaam. Er worden geen tijdelijke bestanden op
+    de doel-PC achtergelaten. Als de USB schrijfbeveiligd is, valt de tool
+    terug op de TEMP-map zodat het rapport altijd geopend kan worden.
+    """
+    hostname = _sanitize_filename(socket.gethostname() or "PC")
+    reports_dir = BASE_DIR / "Reports"
+    out_path = reports_dir / f"{hostname}.html"
+
     try:
-        # Gebruik een temp-bestand zodat read-only USB-sticks geen probleem vormen
-        tmp_dir = Path(tempfile.gettempdir())
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_path = tmp_dir / f"h20_diagnostic_report_{ts}.html"
+        reports_dir.mkdir(parents=True, exist_ok=True)
         out_path.write_text(html_content, encoding="utf-8")
-
-        # Probeer een kopie naast de .exe te maken (zodat de gebruiker het terugvindt)
-        try:
-            mirror = BASE_DIR / f"h20_diagnostic_report_{ts}.html"
-            shutil.copy2(out_path, mirror)
-        except Exception as exc:  # noqa: BLE001
-            log_exception("Rapport-kopie naast .exe", exc)
-
         webbrowser.open(out_path.as_uri())
         return out_path
     except Exception as exc:  # noqa: BLE001
-        log_exception("Rapport schrijven/openen", exc)
-        raise
+        log_exception(f"Rapport schrijven naar {out_path}", exc)
+        # Fallback: schrijf naar TEMP als USB read-only blijkt
+        try:
+            tmp_dir = Path(tempfile.gettempdir())
+            fallback = tmp_dir / f"{hostname}.html"
+            fallback.write_text(html_content, encoding="utf-8")
+            print(f"[!] Kon niet schrijven naar {reports_dir}.")
+            print(f"    Rapport tijdelijk opgeslagen in: {fallback}")
+            webbrowser.open(fallback.as_uri())
+            return fallback
+        except Exception as exc2:  # noqa: BLE001
+            log_exception("Rapport fallback naar TEMP", exc2)
+            raise
 
 
 # ============================================================================

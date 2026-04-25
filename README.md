@@ -87,11 +87,17 @@ your build output.
 
 ## Output & logging
 
-- The HTML report is written to the system temp folder and opened in the
-  default browser. A copy is also saved next to the `.exe` when possible.
+- The HTML report is written to **`Reports/<HOSTNAME>.html`** next to the `.exe`.
+  When the `.exe` is on a USB stick, the report goes onto the **USB stick**
+  itself — nothing is left behind on the target PC. Filename equals the PC's
+  hostname, so scans of multiple machines all live side-by-side in
+  `Reports/`.
+- The report opens automatically in the default browser at the end of the scan.
+- If the USB stick is read-only, the report falls back to the system
+  temp folder so you can still view it.
 - All errors are appended to `h20_diagnostic_log.txt` next to the `.exe`.
-  Inspect this file if a scan seems incomplete — every failed check leaves a
-  trace with a stack trace.
+  Inspect this file if a scan seems incomplete — every failed check leaves
+  a stack trace.
 
 ## Project layout
 

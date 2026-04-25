@@ -12,8 +12,9 @@ build/_pyinstaller_work/
 # Gegenereerde .exe in de project-root (output van build\build.bat)
 h20_diagnostic.exe
 
-# HTML-rapporten die naast de .exe verschijnen na een scan
-h20_diagnostic_report_*.html
+# Reports-map (rapporten worden tijdens een scan naar de USB geschreven, maar
+# als iemand het script in deze repo zou draaien moet die map niet meecommitten)
+Reports/
 
 # Logs
 h20_diagnostic_log.txt
